@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008 The Android Open Source Project
  * Copyright (C) 2014 The Linux Foundation. All rights reserved.
- * Copyright (C) 2016 The CyanogenMod Project
+ * Copyright (C) 2015 The CyanogenMod Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,18 +41,40 @@ static struct light_state_t g_attention;
 static struct light_state_t g_notification;
 static struct light_state_t g_battery;
 
-char const*const RED_LED_FILE
-        = "/sys/class/leds/led:rgb_red/brightness";
+#define LCD_BRIGHTNESS_FILE "/sys/class/leds/lcd-backlight/brightness"
 
-char const*const LCD_FILE
-        = "/sys/class/leds/lcd-backlight/brightness";
+#define RED_MAX_BRIGHTNESS_FILE "/sys/class/leds/led:rgb_red/max_brightness"
 
-char const*const RED_BLINK_FILE
-        = "/sys/class/leds/led:rgb_red/rgbbreath";
+#define RED_LED_FILE "/sys/class/leds/led:rgb_red/brightness"
+#define GREEN_LED_FILE "/sys/class/leds/led:rgb_green/brightness"
+#define BLUE_LED_FILE "/sys/class/leds/led:rgb_blue/brightness"
+
+#define RED_DUTY_PCTS_FILE "/sys/class/leds/led:rgb_red/duty_pcts"
+#define GREEN_DUTY_PCTS_FILE "/sys/class/leds/led:rgb_green/duty_pcts"
+#define BLUE_DUTY_PCTS_FILE "/sys/class/leds/led:rgb_blue/duty_pcts"
+
+#define RED_START_IDX_FILE "/sys/class/leds/led:rgb_red/start_idx"
+#define GREEN_START_IDX_FILE "/sys/class/leds/led:rgb_green/start_idx"
+#define BLUE_START_IDX_FILE "/sys/class/leds/led:rgb_blue/start_idx"
+
+#define RED_PAUSE_LO_FILE "/sys/class/leds/led:rgb_red/pause_lo"
+#define GREEN_PAUSE_LO_FILE "/sys/class/leds/led:rgb_green/pause_lo"
+#define BLUE_PAUSE_LO_FILE "/sys/class/leds/led:rgb_blue/pause_lo"
+
+#define RED_PAUSE_HI_FILE "/sys/class/leds/led:rgb_red/pause_hi"
+#define GREEN_PAUSE_HI_FILE "/sys/class/leds/led:rgb_green/pause_hi"
+#define BLUE_PAUSE_HI_FILE "/sys/class/leds/led:rgb_blue/pause_hi"
+
+#define RED_RAMP_STEP_MS_FILE "/sys/class/leds/led:rgb_red/ramp_step_ms"
+#define GREEN_RAMP_STEP_MS_FILE "/sys/class/leds/led:rgb_green/ramp_step_ms"
+#define BLUE_RAMP_STEP_MS_FILE "/sys/class/leds/led:rgb_blue/ramp_step_ms"
+
+#define RED_BLINK_FILE "/sys/class/leds/led:rgb_red/blink"
+#define GREEN_BLINK_FILE "/sys/class/leds/led:rgb_green/blink"
+#define BLUE_BLINK_FILE "/sys/class/leds/led:rgb_blue/blink"
 
 #define RAMP_SIZE 8
-static int BRIGHTNESS_RAMP[RAMP_SIZE]
-        = { 0, 12, 25, 37, 50, 72, 85, 100 };
+static int BRIGHTNESS_RAMP[RAMP_SIZE] = {0, 12, 25, 37, 50, 72, 85, 100};
 #define RAMP_STEP_DURATION 50
 
 /**
@@ -133,17 +155,53 @@ set_light_backlight(struct light_device_t* dev,
         return -1;
     }
     pthread_mutex_lock(&g_lock);
-    err = write_int(LCD_FILE, brightness);
+    err = write_int(LCD_BRIGHTNESS_FILE, brightness);
     pthread_mutex_unlock(&g_lock);
     return err;
 }
+
+
+static char*
+get_scaled_duty_pcts(int brightness)
+{
+    char *buf = malloc(5 * RAMP_SIZE * sizeof(char));
+    char *pad = "";
+    int i = 0;
+
+    memset(buf, 0, 5 * RAMP_SIZE * sizeof(char));
+
+    for (i = 0; i < RAMP_SIZE; i++) {
+        char temp[5] = "";
+        snprintf(temp, sizeof(temp), "%s%d", pad, (BRIGHTNESS_RAMP[i] * brightness / 255));
+        strcat(buf, temp);
+        pad = ",";
+    }
+    ALOGV("%s: brightness=%d duty=%s", __func__, brightness, buf);
+    return buf;
+}
+
+static int
+read_int(char const *path)
+{
+    int fd;
+    char buffer[4];
+
+    fd = open(path, O_RDONLY);
+
+    if (fd >= 0) {
+        read(fd, buffer, 4);
+    }
+    close(fd);
+
+    return atoi(buffer);
+}
+
 
 static int
 set_speaker_light_locked(struct light_device_t* dev,
         struct light_state_t const* state)
 {
-    int red;
-    int blink;
+    int red, green, blue, blink, maxRed;
     int onMS, offMS, stepDuration, pauseHi;
     unsigned int colorRGB;
     char *duty;
@@ -170,11 +228,28 @@ set_speaker_light_locked(struct light_device_t* dev,
             state->flashMode, colorRGB, onMS, offMS);
 
     red = (colorRGB >> 16) & 0xFF;
-
+    green = (colorRGB >> 8) & 0xFF;
+    blue = colorRGB & 0xFF;
+    // bias for true white
+    if (colorRGB != 0 && red == green && green == blue) {
+        blue = (blue * 171) / 256;
+    }
     blink = onMS > 0 && offMS > 0;
+ 
+#ifdef LIGHTS_ZUK_ONLY_RED_LED
+    maxRed = read_int(RED_MAX_BRIGHTNESS_FILE);
+    red += blue + green;
+    if (red > maxRed){
+        red = maxRed;
+    }
+    green = blue = 0;
+    ALOGV("set_speaker_light_locked maxRed=%d, red=%d, green=%d, blue=%d\n", maxRed, red, green, blue);
+#endif
 
     // disable all blinking to start
     write_int(RED_BLINK_FILE, 0);
+    write_int(GREEN_BLINK_FILE, 0);
+    write_int(BLUE_BLINK_FILE, 0);
 
     if (blink) {
         stepDuration = RAMP_STEP_DURATION;
@@ -184,11 +259,48 @@ set_speaker_light_locked(struct light_device_t* dev,
             pauseHi = 0;
         }
 
+        // red
+        write_int(RED_START_IDX_FILE, 0);
+        duty = get_scaled_duty_pcts(red);    
+        write_str(RED_DUTY_PCTS_FILE, duty);
+        write_int(RED_PAUSE_LO_FILE, offMS);
+        // The led driver is configured to ramp up then ramp
+        // down the lut. This effectively doubles the ramp duration.
+        write_int(RED_PAUSE_HI_FILE, pauseHi);
+        write_int(RED_RAMP_STEP_MS_FILE, stepDuration);
+        free(duty);
+
+        // green
+        write_int(GREEN_START_IDX_FILE, RAMP_SIZE);
+        duty = get_scaled_duty_pcts(green);
+        write_str(GREEN_DUTY_PCTS_FILE, duty);
+        write_int(GREEN_PAUSE_LO_FILE, offMS);
+        // The led driver is configured to ramp up then ramp
+        // down the lut. This effectively doubles the ramp duration.
+        write_int(GREEN_PAUSE_HI_FILE, pauseHi);
+        write_int(GREEN_RAMP_STEP_MS_FILE, stepDuration);
+        free(duty);
+
+        // blue
+        write_int(BLUE_START_IDX_FILE, RAMP_SIZE * 2);
+        duty = get_scaled_duty_pcts(blue);
+        write_str(BLUE_DUTY_PCTS_FILE, duty);
+        write_int(BLUE_PAUSE_LO_FILE, offMS);
+        // The led driver is configured to ramp up then ramp
+        // down the lut. This effectively doubles the ramp duration.
+        write_int(BLUE_PAUSE_HI_FILE, pauseHi);
+        write_int(BLUE_RAMP_STEP_MS_FILE, stepDuration);
+        free(duty);
+
         // start the party
         write_int(RED_BLINK_FILE, red);
+        write_int(GREEN_BLINK_FILE, green);
+        write_int(BLUE_BLINK_FILE, blue);
 
     } else {
         write_int(RED_LED_FILE, red);
+        write_int(GREEN_LED_FILE, green);
+        write_int(BLUE_LED_FILE, blue);
     }
 
 
@@ -334,7 +446,7 @@ struct hw_module_t HAL_MODULE_INFO_SYM = {
     .version_major = 1,
     .version_minor = 0,
     .id = LIGHTS_HARDWARE_MODULE_ID,
-    .name = "ZUK Z2 Lights Module",
+    .name = "Lights Module",
     .author = "The CyanogenMod Project",
     .methods = &lights_module_methods,
 };
