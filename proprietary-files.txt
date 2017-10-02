@@ -253,9 +253,6 @@ vendor/lib/libmmcamera_isp_sce40.so
 vendor/lib/libmmcamera_isp_snr47.so
 vendor/lib/libmmcamera_isp_sub_module.so
 
-# Charger
-bin/hvdcp_opti
-
 # CNE
 bin/cnd
 etc/cne/SwimConfig.xml
@@ -483,9 +480,6 @@ vendor/lib/libvoice-svc.so
 vendor/lib64/libimscamera_jni.so
 vendor/lib64/librcc.so
 vendor/lib64/libvoice-svc.so
-
-# Init (move to device!)
-etc/init.qcom.post_boot.sh
 
 # IPA
 bin/ipacm-diag
